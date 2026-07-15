@@ -9,7 +9,6 @@ Builds the console (ANSI) tables and the HTML email body, matching the
 import sys
 from datetime import datetime, timedelta
 
-from . import config_store as cs
 from . import queries
 
 # ------------------------------------------------------------------------- #
@@ -149,28 +148,81 @@ def print_daily_report(daily_rows: list, title: str):
 
 
 # ------------------------------------------------------------------------- #
-# HTML email -- two tables, styled to match the reference report format.
+# HTML email -- professional newsletter layout. Email clients (esp. Outlook)
+# ignore <style> blocks, flexbox and grid, so everything is table-based with
+# inline styles and bgcolor attributes for maximum compatibility.
 # ------------------------------------------------------------------------- #
-_HEADER_STYLE = (
-    "padding:8px 12px;border:1px solid #ccc;background:#2f5597;"
-    "color:#ffffff;text-align:left;font-family:Segoe UI,Arial,sans-serif;font-size:13px;"
-)
-_CELL_STYLE = "padding:8px 12px;border:1px solid #ccc;font-family:Segoe UI,Arial,sans-serif;font-size:13px;"
-_FIRST_CELL_STYLE = _CELL_STYLE + "font-weight:600;background:#f2f2f2;"
+# Brand palette
+_BRAND = "#2f5597"          # header / table-head blue
+_BRAND_DARK = "#22406f"     # gradient-ish accent
+_INK = "#243244"            # body text
+_MUTED = "#6b7a8d"          # secondary text
+_LINE = "#e2e8f0"           # table borders
+_ZEBRA = "#f6f8fc"          # alternating row
+_PAGE_BG = "#eef1f5"        # outer page background
+_FONT = "Segoe UI,Roboto,Helvetica,Arial,sans-serif"
+
+# The sign-off name. Easy to change here (or ask to make it config-driven).
+SIGNATURE_NAME = "ABHI Aadhaar Support Agent"
 
 
-def _html_table(headers: list, rows: list) -> str:
-    th_cells = "".join(f'<th style="{_HEADER_STYLE}">{h}</th>' for h in headers)
+def _is_number(value) -> bool:
+    s = str(value).strip().replace(",", "")
+    if not s:
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _newsletter_table(headers: list, rows: list) -> str:
+    """A zebra-striped, full-width HTML table with a branded header row.
+    First column left-aligned (label); numeric cells right-aligned."""
+    head_cell = (
+        f"padding:10px 14px;background:{_BRAND};color:#ffffff;"
+        f"font-family:{_FONT};font-size:13px;font-weight:600;"
+        "border:1px solid " + _BRAND + ";white-space:nowrap;"
+    )
+    th_cells = "".join(
+        f'<th align="{"left" if i == 0 else "center"}" style="{head_cell}">{h}</th>'
+        for i, h in enumerate(headers)
+    )
+
     body_rows = ""
-    for row in rows:
-        tds = "".join(
-            f'<td style="{_FIRST_CELL_STYLE if i == 0 else _CELL_STYLE}">{cell}</td>'
-            for i, cell in enumerate(row)
-        )
+    for r_idx, row in enumerate(rows):
+        bg = _ZEBRA if r_idx % 2 else "#ffffff"
+        tds = ""
+        for i, cell in enumerate(row):
+            text = str(cell)
+            is_na = text.strip().upper() == "N/A"
+            align = "left" if (i == 0 or not _is_number(cell)) else "right"
+            base = (
+                f"padding:9px 14px;border:1px solid {_LINE};"
+                f"font-family:{_FONT};font-size:13px;background:{bg};"
+            )
+            if i == 0:
+                base += f"font-weight:600;color:{_INK};"
+            elif is_na:
+                base += f"color:{_MUTED};font-style:italic;"
+            else:
+                base += f"color:{_INK};"
+            tds += f'<td align="{align}" style="{base}">{text}</td>'
         body_rows += f"<tr>{tds}</tr>"
+
     return (
-        '<table style="border-collapse:collapse;margin:12px 0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="border-collapse:collapse;width:100%;margin:6px 0 4px;">'
         f"<thead><tr>{th_cells}</tr></thead><tbody>{body_rows}</tbody></table>"
+    )
+
+
+def _section_heading(text: str) -> str:
+    return (
+        f'<h2 style="margin:26px 0 6px;font-family:{_FONT};font-size:16px;'
+        f'font-weight:700;color:{_BRAND};border-left:4px solid {_BRAND};'
+        f'padding-left:10px;">{text}</h2>'
     )
 
 
@@ -181,31 +233,95 @@ def build_email_html(
     date_ranges: dict,
     daily_rows: list,
     daily_period_label: str,
+    signature_name: str = SIGNATURE_NAME,
 ) -> str:
-    """Builds the combined HTML email body: 'Processing Status' pivot table
-    followed by the 'Day-wise <Month> Execution Summary' table, matching the
-    two-table layout of the reference report."""
+    """Builds the combined HTML email body as a professional newsletter:
+    a branded header, the 'Processing Status' pivot table, the
+    'Day-wise <Month> Execution Summary' table, and a signed footer."""
 
     status_headers = ["Stage"] + [db_configs[k].label for k in selected_dbs]
     status_rows = build_status_table_rows(selected_dbs, db_configs, results, date_ranges)
-    status_table_html = _html_table(status_headers, status_rows)
+    status_table_html = _newsletter_table(status_headers, status_rows)
 
     daily_headers = queries.DAILY_STATUS_COLUMNS
     daily_table_rows = build_daily_table_rows(daily_rows)
-    daily_table_html = _html_table(daily_headers, daily_table_rows)
+    daily_table_html = (
+        _newsletter_table(daily_headers, daily_table_rows)
+        if daily_table_rows
+        else f'<p style="font-family:{_FONT};font-size:13px;color:{_MUTED};'
+             'font-style:italic;margin:6px 0;">No day-wise records for this period.</p>'
+    )
 
-    report_date = datetime.now().strftime("%d-%b-%Y")
+    now = datetime.now()
+    report_date = now.strftime("%d-%b-%Y")
+    generated_at = now.strftime("%d-%b-%Y %H:%M")
+    db_count = len(selected_dbs)
+    daily_summary_label = (f"Day-wise {daily_period_label} Execution Summary").strip()
+
+    preheader = f"Processing Status report for {report_date} across {db_count} database(s)."
 
     html = f"""\
-<html>
-<body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;">
-<p>Hi Team,</p>
-<p>Please find below the Processing Status report generated on {report_date}.</p>
-{status_table_html}
-<p>Day-wise {daily_period_label} Execution Summary</p>
-{daily_table_html}
-<p>Regards,<br>Automated Reporting</p>
-</body>
-</html>
+<!-- preheader (hidden in most clients) -->
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{_PAGE_BG}" style="background:{_PAGE_BG};margin:0;padding:0;">
+  <tr>
+    <td align="center" style="padding:26px 12px;">
+      <table role="presentation" width="680" cellpadding="0" cellspacing="0" style="width:680px;max-width:680px;background:#ffffff;border:1px solid {_LINE};border-radius:10px;overflow:hidden;">
+
+        <!-- Header banner -->
+        <tr>
+          <td style="background:{_BRAND};padding:22px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="font-family:{_FONT};color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.2px;">
+                  Processing Status Report
+                </td>
+                <td align="right" style="font-family:{_FONT};color:#d6e0f5;font-size:13px;white-space:nowrap;">
+                  {report_date}
+                </td>
+              </tr>
+              <tr>
+                <td colspan="2" style="font-family:{_FONT};color:#c3d2ee;font-size:12px;padding-top:4px;">
+                  Aadhaar masking &amp; extraction pipeline &mdash; automated daily summary
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:26px 32px 8px;">
+            <p style="margin:0 0 12px;font-family:{_FONT};font-size:14px;color:{_INK};">Hi Team,</p>
+            <p style="margin:0 0 4px;font-family:{_FONT};font-size:14px;color:{_INK};line-height:1.55;">
+              Please find below the processing status generated on <strong>{report_date}</strong>,
+              covering <strong>{db_count}</strong> database(s).
+            </p>
+
+            {_section_heading("Processing Status")}
+            {status_table_html}
+
+            {_section_heading(daily_summary_label)}
+            {daily_table_html}
+
+            <!-- Sign-off -->
+            <p style="margin:28px 0 2px;font-family:{_FONT};font-size:14px;color:{_INK};">Regards,</p>
+            <p style="margin:0;font-family:{_FONT};font-size:14px;font-weight:700;color:{_BRAND};">{signature_name}</p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:16px 32px 22px;border-top:1px solid {_LINE};">
+            <p style="margin:0;font-family:{_FONT};font-size:11px;color:{_MUTED};line-height:1.5;">
+              This is an automated report generated on {generated_at}. Please do not reply to this email.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
 """
     return html

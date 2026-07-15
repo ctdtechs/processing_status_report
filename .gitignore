@@ -1,6 +1,5 @@
-# Credentials -- never commit these
-config/config_store.sqlite3
-config/config_store.key
+# Config now lives in MSSQL (dbo.report_config) + env vars -- no local
+# secret files to ignore. Bootstrap creds come from CONFIG_DB_* env vars.
 
 # Logs
 status_report.log

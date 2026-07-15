@@ -11,6 +11,7 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 
 from . import config_store as cs
 
@@ -22,7 +23,9 @@ def parse_addr_list(raw: str) -> list:
 
 def send_report_email(mail_cfg: cs.MailConfig, html_body: str, subject: str, to_list: list, cc_list: list):
     msg = MIMEMultipart("alternative")
-    msg["From"] = mail_cfg.mail_from
+    # "Display Name <addr>" when a from_name is configured; bare address otherwise.
+    from_name = getattr(mail_cfg, "mail_from_name", "") or ""
+    msg["From"] = formataddr((from_name, mail_cfg.mail_from)) if from_name else mail_cfg.mail_from
     msg["To"] = "; ".join(to_list)
     if cc_list:
         msg["Cc"] = "; ".join(cc_list)

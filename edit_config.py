@@ -2,109 +2,145 @@
 """
 edit_config.py
 
-Tiny console tool to view and edit the encrypted configuration store
-(config_store.sqlite3) used by status_report.py -- so rotating a
-password or adding a new historical database doesn't require touching
-any code.
+Console tool to view and edit the single configuration row in the MSSQL
+``dbo.report_config`` table used by status_report.py -- so changing the
+date range, database list, mail settings, recipients or trigger times
+doesn't require touching any code or hand-writing SQL.
+
+The config table lives on the Prod SQL instance; connection details come
+from environment variables (see app/config_store.py):
+
+    CONFIG_DB_SERVER  CONFIG_DB_NAME  CONFIG_DB_USER  CONFIG_DB_PWD
+    (optional) CONFIG_DB_DRIVER
 
 Usage:
-    python3 edit_config.py list
-    python3 edit_config.py add
-    python3 edit_config.py update <key>
-    python3 edit_config.py remove <key>
-    python3 edit_config.py mail
+    python edit_config.py show      # print current config (passwords masked)
+    python edit_config.py edit      # guided edit of every field
+    python edit_config.py mailpwd   # rotate just the mail password
 """
 
-import sys
 import getpass
+import sys
 
 from app import config_store as cs
 
 
-def cmd_list():
-    dbs = cs.load_db_configs()
-    if not dbs:
-        print("No databases configured yet.")
+def _mask(secret: str) -> str:
+    if not secret:
+        return "(not set)"
+    return f"{'*' * max(len(secret) - 2, 0)}{secret[-2:]}" if len(secret) > 2 else "**"
+
+
+def cmd_show():
+    cfg = cs.load_app_config()
+    print("Current configuration (dbo.report_config, id=1)")
+    print("-" * 60)
+    print(f"start_date    : {cfg.start_date or '(not set -> current month to date)'}")
+    print(f"end_date      : {cfg.end_date or '(not set -> current month to date)'}")
+    print(f"db_list       : {', '.join(cfg.db_list) or '(none)'}")
+    print(f"prod_db       : {cfg.prod_db or '(none)'}")
+    print(f"report_server : {cfg.report_server or '(use CONFIG_DB_SERVER)'}")
+    print(f"report_user   : {cfg.report_user or '(use CONFIG_DB_USER)'}")
+    print(f"report_pwd    : {_mask(cfg.report_pwd) if cfg.report_pwd else '(use CONFIG_DB_PWD)'}")
+    print(f"from_mail     : {cfg.from_mail or '(none)'}")
+    print(f"from_name     : {cfg.from_name or '(none)'}")
+    print(f"mail_pwd      : {_mask(cfg.mail_password)}  (stored base64)")
+    print(f"to_mails      : {cfg.to_mails or '(none)'}")
+    print(f"cc_mails      : {cfg.cc_mails or '(none)'}")
+    print(f"smtp_server   : {cfg.smtp_server}")
+    print(f"smtp_port     : {cfg.smtp_port}")
+    print(f"triggers      : {', '.join(cfg.triggers) or '(none)'}")
+    print(f"last_run      : {cfg.last_run_marker or '(never)'}")
+
+
+def _ask(label: str, current) -> str:
+    shown = current if current not in (None, "") else "(empty)"
+    val = input(f"{label} [{shown}]: ").strip()
+    return val  # empty string means "keep current"
+
+
+def cmd_edit():
+    cfg = cs.load_app_config()
+    print("Guided edit -- press Enter to keep the current value.\n")
+
+    updates = {}
+
+    v = _ask("Start date (YYYY-MM-DD, '-' to clear)", cfg.start_date)
+    if v:
+        updates["start_date"] = None if v == "-" else v
+    v = _ask("End date (YYYY-MM-DD, exclusive, '-' to clear)", cfg.end_date)
+    if v:
+        updates["end_date"] = None if v == "-" else v
+
+    v = _ask("Database list (comma-separated)", ",".join(cfg.db_list))
+    if v:
+        updates["db_list"] = ",".join(p.strip() for p in v.split(",") if p.strip())
+    v = _ask("PROD database (for day-wise summary)", cfg.prod_db)
+    if v:
+        updates["prod_db"] = v
+
+    v = _ask("Reporting server override ('-' to clear, blank to keep)", cfg.report_server)
+    if v:
+        updates["report_server"] = None if v == "-" else v
+    v = _ask("Reporting login override ('-' to clear)", cfg.report_user)
+    if v:
+        updates["report_user"] = None if v == "-" else v
+
+    v = _ask("From mail id", cfg.from_mail)
+    if v:
+        updates["from_mail"] = v
+    v = _ask("From display name", cfg.from_name)
+    if v:
+        updates["from_name"] = v
+    v = _ask("To recipients (semicolon-separated)", cfg.to_mails)
+    if v:
+        updates["to_mails"] = v
+    v = _ask("Cc recipients (semicolon-separated, '-' to clear)", cfg.cc_mails)
+    if v:
+        updates["cc_mails"] = "" if v == "-" else v
+    v = _ask("SMTP server", cfg.smtp_server)
+    if v:
+        updates["smtp_server"] = v
+    v = _ask("SMTP port", cfg.smtp_port)
+    if v:
+        if v.isdigit():
+            updates["smtp_port"] = int(v)
+        else:
+            print("  Ignoring non-numeric SMTP port.")
+    v = _ask("Trigger times (comma-separated HH:MM, e.g. 09:30,13:30,18:30)",
+             ",".join(cfg.triggers))
+    if v:
+        updates["triggers"] = ",".join(p.strip() for p in v.split(",") if p.strip())
+
+    for column, value in updates.items():
+        cs.set_config_field(column, value)
+
+    # Passwords handled separately (base64-encoded, never echoed).
+    new_mail_pwd = getpass.getpass("Mail password (Enter to keep current): ")
+    if new_mail_pwd:
+        cs.set_mail_password(new_mail_pwd)
+        updates["mail_pwd_b64"] = "(updated)"
+    new_report_pwd = getpass.getpass("Reporting-DB password override (Enter to keep, '-' to clear): ")
+    if new_report_pwd == "-":
+        cs.set_config_field("report_pwd_b64", "")
+        updates["report_pwd_b64"] = "(cleared)"
+    elif new_report_pwd:
+        cs.set_report_password(new_report_pwd)
+        updates["report_pwd_b64"] = "(updated)"
+
+    if updates:
+        print(f"\nUpdated: {', '.join(updates.keys())}")
+    else:
+        print("\nNo changes made.")
+
+
+def cmd_mailpwd():
+    pwd = getpass.getpass("New mail password: ")
+    if not pwd:
+        print("Empty -- no change.")
         return
-    print(f"{'KEY':<14}{'LABEL':<28}{'SERVER':<22}{'DATABASE':<16}{'USERNAME':<14}{'PROD':<6}")
-    for cfg in dbs.values():
-        print(f"{cfg.key:<14}{cfg.label:<28}{cfg.server:<22}{cfg.database:<16}"
-              f"{cfg.username:<14}{'YES' if cfg.is_prod else '':<6}")
-
-
-def _prompt_db_config(existing: cs.DbConfig = None) -> cs.DbConfig:
-    def ask(label, default=None):
-        suffix = f" [{default}]" if default else ""
-        val = input(f"{label}{suffix}: ").strip()
-        return val or default or ""
-
-    key = existing.key if existing else ask("Key (e.g. abhi_maskv7)")
-    label = ask("Display label", existing.label if existing else f"{key} (Historical)")
-    server = ask("Server (host,port)", existing.server if existing else "10.21.42.17,1433")
-    database = ask("Database name", existing.database if existing else key)
-    username = ask("Username", existing.username if existing else "")
-    pwd_prompt = "Password (leave blank to keep current)" if existing else "Password"
-    password = getpass.getpass(f"{pwd_prompt}: ")
-    if not password and existing:
-        password = existing.password
-    is_prod_raw = ask("Is this the PROD database? (y/n)", "y" if (existing and existing.is_prod) else "n")
-    is_prod = is_prod_raw.strip().lower().startswith("y")
-    return cs.DbConfig(key, label, server, database, username, password, is_prod)
-
-
-def cmd_add():
-    cfg = _prompt_db_config()
-    cs.upsert_db_config(cfg)
-    print(f"Added/updated '{cfg.key}'.")
-
-
-def cmd_update(key: str):
-    dbs = cs.load_db_configs()
-    if key not in dbs:
-        print(f"No such key: {key}")
-        sys.exit(1)
-    cfg = _prompt_db_config(dbs[key])
-    cs.upsert_db_config(cfg)
-    print(f"Updated '{key}'.")
-
-
-def cmd_remove(key: str):
-    dbs = cs.load_db_configs()
-    if key not in dbs:
-        print(f"No such key: {key}")
-        sys.exit(1)
-    confirm = input(f"Delete config for '{key}' ({dbs[key].label})? (y/n): ").strip().lower()
-    if confirm == "y":
-        cs.delete_db_config(key)
-        print("Deleted.")
-
-
-def cmd_mail():
-    mc = cs.load_mail_config()
-    print(f"SMTP server : {mc.smtp_server}")
-    print(f"SMTP port   : {mc.smtp_port}")
-    print(f"Mail from   : {mc.mail_from}")
-    print(f"Default To  : {mc.default_to}")
-    print(f"Default Cc  : {mc.default_cc}")
-    print()
-    if input("Update any of these? (y/n): ").strip().lower() != "y":
-        return
-
-    smtp_server = input(f"SMTP server [{mc.smtp_server}]: ").strip() or mc.smtp_server
-    smtp_port = input(f"SMTP port [{mc.smtp_port}]: ").strip() or str(mc.smtp_port)
-    mail_from = input(f"Mail from [{mc.mail_from}]: ").strip() or mc.mail_from
-    default_to = input(f"Default To [{mc.default_to}]: ").strip() or mc.default_to
-    default_cc = input(f"Default Cc [{mc.default_cc}]: ").strip() or mc.default_cc
-    new_password = getpass.getpass("Mail password (leave blank to keep current): ")
-
-    cs.set_mail_setting("smtp_server", smtp_server)
-    cs.set_mail_setting("smtp_port", smtp_port)
-    cs.set_mail_setting("mail_from", mail_from)
-    cs.set_mail_setting("default_to", default_to)
-    cs.set_mail_setting("default_cc", default_cc)
-    if new_password:
-        cs.set_mail_setting("mail_password", new_password, encrypt=True)
-    print("Mail config updated.")
+    cs.set_mail_password(pwd)
+    print("Mail password updated (stored base64).")
 
 
 def main():
@@ -113,22 +149,12 @@ def main():
         sys.exit(1)
 
     cmd = sys.argv[1]
-    if cmd == "list":
-        cmd_list()
-    elif cmd == "add":
-        cmd_add()
-    elif cmd == "update":
-        if len(sys.argv) < 3:
-            print("Usage: python3 edit_config.py update <key>")
-            sys.exit(1)
-        cmd_update(sys.argv[2])
-    elif cmd == "remove":
-        if len(sys.argv) < 3:
-            print("Usage: python3 edit_config.py remove <key>")
-            sys.exit(1)
-        cmd_remove(sys.argv[2])
-    elif cmd == "mail":
-        cmd_mail()
+    if cmd == "show":
+        cmd_show()
+    elif cmd == "edit":
+        cmd_edit()
+    elif cmd == "mailpwd":
+        cmd_mailpwd()
     else:
         print(__doc__)
         sys.exit(1)

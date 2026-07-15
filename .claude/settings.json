@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile status_report.py edit_config.py app/config_store.py app/mailer.py app/db.py app/report.py app/queries.py)",
+      "Bash(python -c \"import base64; print\\(base64.b64encode\\('NiveM#31'.encode\\(\\)\\).decode\\(\\)\\)\")",
+      "Bash(python -m py_compile status_report.py edit_config.py app/config_store.py app/mailer.py)",
+      "Bash(python -m py_compile status_report.py)"
+    ]
+  }
+}

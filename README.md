@@ -1,97 +1,165 @@
 # Processing Status Report
 
-## What changed from the original single-file script
+## What this is
 
-1. **Email format now matches the reference report** — two tables:
-   - *Processing Status* (Stage × Database pivot — unchanged logic)
-   - *Day-wise `<Month>` Execution Summary* — new, built from the
-     day-wise SQL you supplied, run automatically against **PROD** for
-     the current month to date every time you run the report. No extra
-     prompts needed; it just appears alongside the pivot table in both
-     the console output and the emailed HTML.
+Console tool that runs the *Processing Status* pivot query (Stage ×
+Database) and the *Day-wise Execution Summary* against the PROD database,
+renders both as console tables, and emails them as a single HTML report.
 
-2. **No more hardcoded credentials.** Server/database/username/password
-   per database, and the SMTP mail settings, used to sit in plaintext
-   (or weak base64) directly in the `.py` file. They now live in a local
-   **encrypted configuration store**:
-   - `config_store.sqlite3` — the configuration tables (`db_config`,
-     `mail_config`). Passwords are stored **encrypted**, never plaintext.
-   - `config_store.key` — the encryption key (Fernet/AES). Auto-created
-     with owner-only file permissions (`chmod 600`).
+## Configuration lives in MSSQL now (not SQLite)
 
-   Both files are created and seeded automatically the first time you
-   run anything (so it works out of the box with your existing values).
-   After that, use `edit_config.py` to add a database, rotate a
-   password, or change mail settings — no code edits required.
+All configuration lives in **one row** of a table on the **Prod SQL
+Server** instance:
 
-   **Keep `config_store.key` and `config_store.sqlite3` out of version
-   control** (already covered by `.gitignore`). If you have a real
-   secrets manager available (Azure Key Vault, AWS Secrets Manager,
-   etc.), that's a better fit for a larger production estate — swap
-   `config_store.py`'s `load_db_configs()` / `load_mail_config()` for
-   calls into that instead; every other module only depends on the
-   `DbConfig`/`MailConfig` shapes, not on SQLite specifically.
+```
+dbo.report_config   (id = 1, singleton)
+```
+
+The application auto-creates and seeds this table on first connect, so it
+works out of the box. A DBA can also pre-create it with
+[sql/create_report_config.sql](sql/create_report_config.sql) and lock
+down permissions first.
+
+### Configurable fields (the config row)
+
+| Column | Meaning |
+| --- | --- |
+| `start_date` | Pivot range start (inclusive). Blank → current month to date. |
+| `end_date` | Pivot range end (exclusive). Blank → current month to date. |
+| `db_list` | Comma-separated database names to run against. |
+| `prod_db` | Which database in `db_list` is PROD (day-wise summary). |
+| `report_server` / `report_user` / `report_pwd_b64` | Optional overrides for the reporting-DB connection. Blank → reuse the bootstrap `CONFIG_DB_*` login (config table is on the same instance). |
+| `from_mail` | "From" mail id. |
+| `from_name` | "From" display name. |
+| `mail_pwd_b64` | Mail password, **base64-encoded**. |
+| `to_mails` | Semicolon-separated To recipients. |
+| `cc_mails` | Semicolon-separated Cc recipients. |
+| `smtp_server` / `smtp_port` | SMTP host/port. |
+| `triggers` | Comma-separated `HH:MM` (24h) trigger times, e.g. `09:30,13:30,18:30`. |
+| `last_run_marker` | Internal — de-dups scheduler runs. Don't edit. |
+
+> **Security note:** `mail_pwd_b64` / `report_pwd_b64` are **base64 —
+> encoding, not encryption**. Anyone who can read the row can decode the
+> password. Restrict the table with SQL Server permissions (grant
+> SELECT/UPDATE only to the service account), and consider SQL Server
+> Always Encrypted on those columns if real secrecy is required.
+
+### Bootstrap connection (environment variables)
+
+The config table is on the Prod instance, so its connection details can't
+live in the table. Set these env vars before running anything:
+
+| Variable | Example |
+| --- | --- |
+| `CONFIG_DB_SERVER` | `10.21.42.17,7865` |
+| `CONFIG_DB_NAME` | `master` (or a dedicated `ops` DB) |
+| `CONFIG_DB_USER` | `ABHIMASK` |
+| `CONFIG_DB_PWD` | `***` |
+| `CONFIG_DB_DRIVER` | *(optional)* `ODBC Driver 18 for SQL Server` |
+
+PowerShell:
+
+```powershell
+$env:CONFIG_DB_SERVER = "10.21.42.17,7865"
+$env:CONFIG_DB_NAME   = "master"
+$env:CONFIG_DB_USER   = "ABHIMASK"
+$env:CONFIG_DB_PWD    = "***"
+```
+
+The same login is reused to query each database in `db_list` (they're on
+the same instance) unless overridden by `report_server`/`report_user`/
+`report_pwd_b64`.
 
 ## Folder structure
 
 ```
 processing_status_report/
 ├── status_report.py       # Main CLI -- run this
-├── edit_config.py         # CLI to view/add/update/remove DB & mail config
+├── edit_config.py         # View/edit the MSSQL config row
 ├── requirements.txt
 ├── README.md
-├── .gitignore
-├── app/                   # Package: importable modules
-│   ├── __init__.py
-│   ├── config_store.py    # Encrypted config storage (SQLite + Fernet)
-│   ├── db.py               # Connections, retry/backoff on transient SQL errors
-│   ├── queries.py          # All SQL (pivot query + day-wise PROD query)
-│   ├── report.py           # Console table rendering + HTML email building
-│   └── mailer.py           # SMTP sending
-└── config/                 # Created/used at runtime -- NOT source code
-    ├── config_store.sqlite3   # generated on first run (git-ignored)
-    └── config_store.key       # generated on first run (git-ignored)
+├── sql/
+│   └── create_report_config.sql   # optional manual DDL for DBAs
+└── app/
+    ├── config_store.py    # MSSQL config storage (dbo.report_config)
+    ├── db.py              # Connections, retry/backoff on transient SQL errors
+    ├── queries.py         # All SQL (pivot query + day-wise PROD query)
+    ├── report.py          # Console table rendering + HTML email building
+    └── mailer.py          # SMTP sending
 ```
-
-Run everything from the `processing_status_report/` folder (so the
-`app` package resolves and `config/` lands in the right place).
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt   # needs the ODBC Driver 18 for SQL Server installed
 ```
 
-First run seeds `config_store.sqlite3` from your original values
-(server `10.21.42.17,1433`, user `ABHIMASK`, the 6 `abhi_mask*`
-databases, `abhi_mask` flagged as PROD). Review/rotate them:
+## View / edit config
 
 ```bash
-python3 edit_config.py list
-python3 edit_config.py mail
+python edit_config.py show      # print current config (passwords masked)
+python edit_config.py edit      # guided edit of every field
+python edit_config.py mailpwd   # rotate just the mail password
 ```
 
 ## Run
 
-```bash
-python3 status_report.py
-```
-
-Pick database(s) and a date range for the *Processing Status* table as
-before. The *Day-wise Execution Summary* for PROD (current month to
-date) runs automatically and prints/emails alongside it.
-
-## Adding a new historical database (e.g. `abhi_maskv7`)
+**Interactive (manual, ad-hoc)** — pick databases and a date range as before:
 
 ```bash
-python3 edit_config.py add
+python status_report.py
 ```
 
-No code changes needed — it'll show up in the database picker next run.
+**Config-driven, scheduled** — reads everything from the config row and
+emails the configured recipients, no prompts:
+
+```bash
+python status_report.py --auto     # sends only if a configured trigger time has just arrived
+python status_report.py --force    # sends immediately, ignoring trigger times
+python status_report.py --auto --grace 30   # widen the catch-up window (minutes)
+```
+
+### The send times live in the table, not in cron
+
+You schedule cron yourself, but the **actual mail send times come from the
+`triggers` column** in `dbo.report_config` — so you can change them any
+time with `edit_config.py` (or plain SQL) and never touch crontab.
+
+How it works: cron runs `--auto` every few minutes. Each run checks the
+`triggers` times against the clock and sends the report when a time has
+**just arrived** — specifically within `[trigger_time, trigger_time +
+grace]` (default grace 15 min), and only **once per trigger per day**
+(de-duped via `last_run_marker`). It fires at/just-after the time, never
+early.
+
+**cron** — run the checker every 10 minutes:
+
+```
+*/10 * * * *  cd /path/to/processing_status_report && python status_report.py --auto
+```
+
+Keep `--grace` **>= your cron interval** so a trigger is never skipped
+between two runs (10-min cron → grace 15 is safe).
+
+**Changing the send times later** — no cron edit needed:
+
+```bash
+python edit_config.py edit    # set Trigger times, e.g. 09:30,13:30,18:30
+# or straight SQL:
+# UPDATE dbo.report_config SET triggers = '08:00,12:00,17:00' WHERE id = 1;
+```
+
+If `start_date`/`end_date` are both set, `--auto` also refuses to run
+outside that active date range.
+
+**Windows Task Scheduler** (if you use it instead of cron) — one task
+running every ~10 min, `Program: python`, `Arguments:
+C:\path\to\status_report.py --auto`, with the `CONFIG_DB_*` env vars set
+for the task's service account.
 
 ## Recommended indexes
 
-Same as before — ask your DBA to add these if not already present:
+Ask your DBA to add these if not already present:
 
 ```sql
 CREATE NONCLUSTERED INDEX IX_files_uploaded_at

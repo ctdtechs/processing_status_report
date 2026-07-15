@@ -154,6 +154,17 @@ class MailConfig:
 
 
 @dataclass
+class DbEntry:
+    """One reporting database with its own date range (dbo.report_databases)."""
+    name: str
+    start_date: Optional[str]   # 'YYYY-MM-DD' or None (fall back to global/auto)
+    end_date: Optional[str]     # 'YYYY-MM-DD' or None
+    is_prod: bool = False
+    enabled: bool = True
+    sort_order: int = 0
+
+
+@dataclass
 class AppConfig:
     start_date: Optional[str]      # 'YYYY-MM-DD' or None
     end_date: Optional[str]        # 'YYYY-MM-DD' or None
@@ -271,6 +282,22 @@ BEGIN
 END
 """
 
+# Per-database table: one row per reporting database, each with its OWN
+# date range. This is what lets every DB use a different start/end.
+_CREATE_DATABASES_SQL = """
+IF OBJECT_ID('dbo.report_databases', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.report_databases (
+        db_name     NVARCHAR(256) NOT NULL PRIMARY KEY,
+        start_date  DATE          NULL,      -- per-DB range start (inclusive); NULL -> fall back
+        end_date    DATE          NULL,      -- per-DB range end   (exclusive); NULL -> fall back
+        is_prod     BIT           NOT NULL CONSTRAINT DF_report_databases_prod    DEFAULT 0,
+        enabled     BIT           NOT NULL CONSTRAINT DF_report_databases_enabled DEFAULT 1,
+        sort_order  INT           NOT NULL CONSTRAINT DF_report_databases_sort    DEFAULT 0
+    );
+END
+"""
+
 # Seed values -- only inserted if the singleton row is missing. Mirrors
 # the original hardcoded defaults so the tool works out of the box; edit
 # afterwards with edit_config.py (do not expect changes here to take
@@ -309,9 +336,31 @@ def _seed_if_empty(conn: "pyodbc.Connection"):
     )
 
 
+def _seed_databases_if_empty(conn: "pyodbc.Connection"):
+    """Seed dbo.report_databases (one row per DB) the first time it's empty,
+    carrying over the db_list / prod_db already in report_config so existing
+    installs keep working. After that this table is authoritative."""
+    count = conn.execute("SELECT COUNT(*) FROM dbo.report_databases").fetchone()[0]
+    if count:
+        return
+    row = conn.execute(
+        "SELECT db_list, prod_db FROM dbo.report_config WHERE id = ?", CONFIG_ROW_ID
+    ).fetchone()
+    db_list = _split_list(row[0] if row else "", ",")
+    prod_db = (row[1] if row else None) or None
+    for i, name in enumerate(db_list):
+        conn.execute(
+            "INSERT INTO dbo.report_databases (db_name, start_date, end_date, is_prod, enabled, sort_order) "
+            "VALUES (?, NULL, NULL, ?, 1, ?)",
+            name, 1 if name == prod_db else 0, i,
+        )
+
+
 def _ensure_ready(conn: "pyodbc.Connection"):
     conn.execute(_CREATE_TABLE_SQL)
+    conn.execute(_CREATE_DATABASES_SQL)
     _seed_if_empty(conn)
+    _seed_databases_if_empty(conn)
     conn.commit()
 
 
@@ -377,12 +426,37 @@ def load_app_config() -> AppConfig:
     )
 
 
+def load_db_entries() -> List[DbEntry]:
+    """Read every ENABLED reporting database (with its own date range) from
+    dbo.report_databases, ordered by sort_order then name."""
+    with closing(_connect_config_db()) as conn:
+        _ensure_ready(conn)
+        rows = conn.execute(
+            "SELECT db_name, start_date, end_date, is_prod, enabled, sort_order "
+            "FROM dbo.report_databases WHERE enabled = 1 "
+            "ORDER BY sort_order, db_name"
+        ).fetchall()
+    return [
+        DbEntry(
+            name=r[0],
+            start_date=_fmt_date(r[1]),
+            end_date=_fmt_date(r[2]),
+            is_prod=bool(r[3]),
+            enabled=bool(r[4]),
+            sort_order=int(r[5]),
+        )
+        for r in rows
+    ]
+
+
 def load_db_configs(app_cfg: Optional[AppConfig] = None) -> Dict[str, DbConfig]:
-    """Build a {db_name: DbConfig} map from the config row's db_list.
+    """Build a {db_name: DbConfig} map from dbo.report_databases.
 
     The reporting databases live on the same instance as the config table,
     so by default they reuse the bootstrap login. report_server /
-    report_user / report_pwd_b64 override that if set.
+    report_user / report_pwd_b64 (on report_config) override that if set.
+    Per-DB date ranges are NOT part of DbConfig -- get them from
+    load_db_entries() / resolve_date_range().
     """
     if app_cfg is None:
         app_cfg = load_app_config()
@@ -393,19 +467,30 @@ def load_db_configs(app_cfg: Optional[AppConfig] = None) -> Dict[str, DbConfig]:
     password = app_cfg.report_pwd if app_cfg.report_pwd is not None else env["pwd"]
 
     result: Dict[str, DbConfig] = {}
-    for name in app_cfg.db_list:
-        is_prod = (app_cfg.prod_db is not None and name == app_cfg.prod_db)
-        label = f"{name} (PROD)" if is_prod else f"{name} (Historical)"
-        result[name] = DbConfig(
-            key=name,
+    for entry in load_db_entries():
+        label = f"{entry.name} (PROD)" if entry.is_prod else f"{entry.name} (Historical)"
+        result[entry.name] = DbConfig(
+            key=entry.name,
             label=label,
             server=server,
-            database=name,
+            database=entry.name,
             username=username,
             password=password,
-            is_prod=is_prod,
+            is_prod=entry.is_prod,
         )
     return result
+
+
+def resolve_date_range(entry: DbEntry, app_cfg: AppConfig):
+    """The effective (start, end) for a DB: its own range if both set, else
+    the global report_config range if both set, else None (caller decides a
+    default, e.g. current month to date). Returns a (start, end) tuple or None.
+    """
+    if entry.start_date and entry.end_date:
+        return entry.start_date, entry.end_date
+    if app_cfg.start_date and app_cfg.end_date:
+        return app_cfg.start_date, app_cfg.end_date
+    return None
 
 
 def get_prod_db_key(db_configs: Dict[str, DbConfig]) -> Optional[str]:
@@ -468,3 +553,72 @@ def set_report_password(plaintext: str):
 def mark_trigger_fired(marker: str):
     """Record the last fired trigger ('YYYY-MM-DD HH:MM') for de-dup."""
     set_config_field("last_run_marker", marker)
+
+
+# ------------------------------------------------------------------ #
+# Per-database writers (dbo.report_databases)
+# ------------------------------------------------------------------ #
+def _norm_date(value: Optional[str]) -> Optional[str]:
+    """Empty string -> None (NULL); otherwise pass through 'YYYY-MM-DD'."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def upsert_db_entry(name: str, start_date: Optional[str] = None, end_date: Optional[str] = None,
+                    is_prod: bool = False, enabled: bool = True, sort_order: int = 0):
+    """Add or update one reporting database (with its own date range)."""
+    s, e = _norm_date(start_date), _norm_date(end_date)
+    with closing(_connect_config_db()) as conn:
+        _ensure_ready(conn)
+        exists = conn.execute(
+            "SELECT 1 FROM dbo.report_databases WHERE db_name = ?", name
+        ).fetchone()
+        if exists:
+            conn.execute(
+                "UPDATE dbo.report_databases SET start_date=?, end_date=?, "
+                "is_prod=?, enabled=?, sort_order=? WHERE db_name=?",
+                s, e, int(is_prod), int(enabled), int(sort_order), name,
+            )
+        else:
+            conn.execute(
+                "INSERT INTO dbo.report_databases "
+                "(db_name, start_date, end_date, is_prod, enabled, sort_order) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                name, s, e, int(is_prod), int(enabled), int(sort_order),
+            )
+        conn.commit()
+
+
+def set_db_range(name: str, start_date: Optional[str], end_date: Optional[str]):
+    """Set just the date range for one database (empty string clears -> NULL)."""
+    with closing(_connect_config_db()) as conn:
+        _ensure_ready(conn)
+        n = conn.execute(
+            "UPDATE dbo.report_databases SET start_date = ?, end_date = ? WHERE db_name = ?",
+            _norm_date(start_date), _norm_date(end_date), name,
+        ).rowcount
+        conn.commit()
+    if n == 0:
+        raise ValueError(f"No such database in config: {name}")
+
+
+def set_prod_db(name: str):
+    """Mark one database as PROD (and clear the flag on all others)."""
+    with closing(_connect_config_db()) as conn:
+        _ensure_ready(conn)
+        conn.execute("UPDATE dbo.report_databases SET is_prod = 0")
+        n = conn.execute(
+            "UPDATE dbo.report_databases SET is_prod = 1 WHERE db_name = ?", name
+        ).rowcount
+        conn.commit()
+    if n == 0:
+        raise ValueError(f"No such database in config: {name}")
+
+
+def delete_db_entry(name: str):
+    with closing(_connect_config_db()) as conn:
+        _ensure_ready(conn)
+        conn.execute("DELETE FROM dbo.report_databases WHERE db_name = ?", name)
+        conn.commit()

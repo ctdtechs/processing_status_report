@@ -152,14 +152,15 @@ def print_daily_report(daily_rows: list, title: str):
 # ignore <style> blocks, flexbox and grid, so everything is table-based with
 # inline styles and bgcolor attributes for maximum compatibility.
 # ------------------------------------------------------------------------- #
-# Brand palette
-_BRAND = "#2f5597"          # header / table-head blue
-_BRAND_DARK = "#22406f"     # gradient-ish accent
-_INK = "#243244"            # body text
-_MUTED = "#6b7a8d"          # secondary text
-_LINE = "#e2e8f0"           # table borders
-_ZEBRA = "#f6f8fc"          # alternating row
-_PAGE_BG = "#eef1f5"        # outer page background
+# Brand palette -- red + gold, from the logo's sunburst.
+_BRAND = "#c1272d"          # primary red (header / table-head)
+_BRAND_DARK = "#8e1b20"     # deep red accent
+_ACCENT = "#f2a900"         # gold (accent strips, section rule)
+_ON_BRAND = "#fbe3b8"       # soft gold-cream text on the red header
+_INK = "#2b2b2b"            # body text
+_MUTED = "#8a8a8a"          # secondary text
+_LINE = "#e8dcdc"           # warm table borders
+_ZEBRA = "#fbf3f2"          # alternating row (warm tint)
 _FONT = "Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 
 # The sign-off name. Easy to change here (or ask to make it config-driven).
@@ -221,7 +222,7 @@ def _newsletter_table(headers: list, rows: list) -> str:
 def _section_heading(text: str) -> str:
     return (
         f'<h2 style="margin:26px 0 6px;font-family:{_FONT};font-size:16px;'
-        f'font-weight:700;color:{_BRAND};border-left:4px solid {_BRAND};'
+        f'font-weight:700;color:{_BRAND};border-left:4px solid {_ACCENT};'
         f'padding-left:10px;">{text}</h2>'
     )
 
@@ -263,65 +264,59 @@ def build_email_html(
     html = f"""\
 <!-- preheader (hidden in most clients) -->
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{_PAGE_BG}" style="background:{_PAGE_BG};margin:0;padding:0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="width:100%;background:#ffffff;margin:0;padding:0;">
+
+  <!-- Header banner (full-width, red with a gold accent strip) -->
   <tr>
-    <td align="center" style="padding:26px 12px;">
-      <table role="presentation" width="680" cellpadding="0" cellspacing="0" style="width:680px;max-width:680px;background:#ffffff;border:1px solid {_LINE};border-radius:10px;overflow:hidden;">
-
-        <!-- Header banner -->
+    <td style="background:{_BRAND};border-bottom:4px solid {_ACCENT};padding:22px 32px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <td style="background:{_BRAND};padding:22px 32px;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="font-family:{_FONT};color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.2px;">
-                  Processing Status Report
-                </td>
-                <td align="right" style="font-family:{_FONT};color:#d6e0f5;font-size:13px;white-space:nowrap;">
-                  {report_date}
-                </td>
-              </tr>
-              <tr>
-                <td colspan="2" style="font-family:{_FONT};color:#c3d2ee;font-size:12px;padding-top:4px;">
-                  Aadhaar masking &amp; extraction pipeline &mdash; automated daily summary
-                </td>
-              </tr>
-            </table>
+          <td style="font-family:{_FONT};color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.2px;">
+            Processing Status Report
+          </td>
+          <td align="right" style="font-family:{_FONT};color:{_ON_BRAND};font-size:13px;white-space:nowrap;">
+            {report_date}
           </td>
         </tr>
-
-        <!-- Body -->
         <tr>
-          <td style="padding:26px 32px 8px;">
-            <p style="margin:0 0 12px;font-family:{_FONT};font-size:14px;color:{_INK};">Hi Team,</p>
-            <p style="margin:0 0 4px;font-family:{_FONT};font-size:14px;color:{_INK};line-height:1.55;">
-              Please find below the processing status generated on <strong>{report_date}</strong>,
-              covering <strong>{db_count}</strong> database(s).
-            </p>
-
-            {_section_heading("Processing Status")}
-            {status_table_html}
-
-            {_section_heading(daily_summary_label)}
-            {daily_table_html}
-
-            <!-- Sign-off -->
-            <p style="margin:28px 0 2px;font-family:{_FONT};font-size:14px;color:{_INK};">Regards,</p>
-            <p style="margin:0;font-family:{_FONT};font-size:14px;font-weight:700;color:{_BRAND};">{signature_name}</p>
+          <td colspan="2" style="font-family:{_FONT};color:{_ON_BRAND};font-size:12px;padding-top:4px;">
+            Aadhaar masking &amp; extraction pipeline &mdash; automated daily summary
           </td>
         </tr>
-
-        <!-- Footer -->
-        <tr>
-          <td style="padding:16px 32px 22px;border-top:1px solid {_LINE};">
-            <p style="margin:0;font-family:{_FONT};font-size:11px;color:{_MUTED};line-height:1.5;">
-              This is an automated report generated on {generated_at}. Please do not reply to this email.
-            </p>
-          </td>
-        </tr>
-
       </table>
     </td>
   </tr>
+
+  <!-- Body (directly on the main body, full width) -->
+  <tr>
+    <td style="padding:26px 32px 8px;">
+      <p style="margin:0 0 12px;font-family:{_FONT};font-size:14px;color:{_INK};">Hi Team,</p>
+      <p style="margin:0 0 4px;font-family:{_FONT};font-size:14px;color:{_INK};line-height:1.55;">
+        Please find below the processing status generated on <strong>{report_date}</strong>,
+        covering <strong>{db_count}</strong> database(s).
+      </p>
+
+      {_section_heading("Processing Status")}
+      {status_table_html}
+
+      {_section_heading(daily_summary_label)}
+      {daily_table_html}
+
+      <!-- Sign-off -->
+      <p style="margin:28px 0 2px;font-family:{_FONT};font-size:14px;color:{_INK};">Regards,</p>
+      <p style="margin:0;font-family:{_FONT};font-size:14px;font-weight:700;color:{_BRAND};">{signature_name}</p>
+    </td>
+  </tr>
+
+  <!-- Footer -->
+  <tr>
+    <td style="padding:16px 32px 22px;border-top:2px solid {_ACCENT};">
+      <p style="margin:0;font-family:{_FONT};font-size:11px;color:{_MUTED};line-height:1.5;">
+        This is an automated report generated on {generated_at}. Please do not reply to this email.
+      </p>
+    </td>
+  </tr>
+
 </table>
 """
     return html

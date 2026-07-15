@@ -184,7 +184,7 @@ def run_daily_prod_summary(db_configs: dict):
     if not prod_key:
         log.warning("No database is flagged is_prod=True in config -- skipping "
                      "Day-wise Execution Summary. Set one with: "
-                     "python3 edit_config.py update <key>")
+                     "python edit_config.py db-prod <name>")
         return [], ""
 
     start_date, end_date = current_month_to_date_range()
@@ -313,22 +313,30 @@ def select_due_trigger(app_cfg: cs.AppConfig, now: datetime, grace_min: int):
 # ------------------------------------------------------------------------- #
 def run_config_driven(app_cfg: cs.AppConfig, db_configs: dict):
     if not db_configs:
-        log.error("Config db_list is empty -- nothing to run. Set it with: python edit_config.py")
+        log.error("No enabled databases configured -- nothing to run. "
+                  "Add one with: python edit_config.py db-add")
         return False
 
-    # Date range: configured start/end if present, else current month to date.
-    if app_cfg.start_date and app_cfg.end_date:
-        start_date, end_date = app_cfg.start_date, app_cfg.end_date
-    else:
-        start_date, end_date = current_month_to_date_range()
-        log.info(f"start_date/end_date not fully set in config -- defaulting to "
-                 f"current month to date [{start_date} -> {end_date}].")
+    # Per-DB date range: each DB uses its own range from dbo.report_databases;
+    # if a DB has no range, fall back to the global report_config range, then
+    # to current month to date.
+    entries = {e.name: e for e in cs.load_db_entries()}
+    default_range = current_month_to_date_range()
 
     selected_dbs = list(db_configs.keys())
-    date_ranges = {k: (start_date, end_date) for k in selected_dbs}
+    date_ranges = {}
+    for k in selected_dbs:
+        entry = entries.get(k)
+        rng = cs.resolve_date_range(entry, app_cfg) if entry else None
+        if rng is None:
+            rng = default_range
+            log.info(f"[{k}] no date range set -- defaulting to current month to date "
+                     f"[{rng[0]} -> {rng[1]}].")
+        date_ranges[k] = rng
 
     results = {}
     for k in selected_dbs:
+        start_date, end_date = date_ranges[k]
         log.info(f"Running query on {db_configs[k].label} [{start_date} -> {end_date}] ...")
         results[k] = db.run_status_query(db_configs[k], start_date, end_date)
 
@@ -422,7 +430,7 @@ def main_interactive():
 
     db_configs = cs.load_db_configs()
     if not db_configs:
-        print(f"{C.RED}No databases configured. Run: python3 edit_config.py add{C.RESET}")
+        print(f"{C.RED}No databases configured. Run: python edit_config.py db-add <name>{C.RESET}")
         sys.exit(1)
 
     selected_dbs = prompt_database_selection(db_configs)

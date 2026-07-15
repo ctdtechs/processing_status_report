@@ -15,19 +15,30 @@ Server** instance:
 dbo.report_config   (id = 1, singleton)
 ```
 
-The application auto-creates and seeds this table on first connect, so it
-works out of the box. A DBA can also pre-create it with
+Two tables are used (both auto-created and seeded on first connect, so it
+works out of the box). A DBA can also pre-create them with
 [sql/create_report_config.sql](sql/create_report_config.sql) and lock
 down permissions first.
 
-### Configurable fields (the config row)
+### `dbo.report_databases` — one row per database, each with its own date range
 
 | Column | Meaning |
 | --- | --- |
-| `start_date` | Pivot range start (inclusive). Blank → current month to date. |
-| `end_date` | Pivot range end (exclusive). Blank → current month to date. |
-| `db_list` | Comma-separated database names to run against. |
-| `prod_db` | Which database in `db_list` is PROD (day-wise summary). |
+| `db_name` | Database name to run the report against. |
+| `start_date` | This DB's range start (inclusive). `NULL` → fall back to the global default, then current month to date. |
+| `end_date` | This DB's range end (**exclusive**). `NULL` → fall back. |
+| `is_prod` | `1` for the PROD database (drives the day-wise summary). Only one should be `1`. |
+| `enabled` | `1` to include it in runs, `0` to skip. |
+| `sort_order` | Column order in the report. |
+
+This is where **different date ranges per database** live — see
+[Per-database date ranges](#per-database-date-ranges) below.
+
+### `dbo.report_config` — one row (id = 1): mail, triggers, global defaults
+
+| Column | Meaning |
+| --- | --- |
+| `start_date` / `end_date` | **Default** range used only for databases whose own range is unset. Blank → current month to date. |
 | `report_server` / `report_user` / `report_pwd_b64` | Optional overrides for the reporting-DB connection. Blank → reuse the bootstrap `CONFIG_DB_*` login (config table is on the same instance). |
 | `from_mail` | "From" mail id. |
 | `from_name` | "From" display name. |
@@ -36,6 +47,7 @@ down permissions first.
 | `cc_mails` | Semicolon-separated Cc recipients. |
 | `smtp_server` / `smtp_port` | SMTP host/port. |
 | `triggers` | Comma-separated `HH:MM` (24h) trigger times, e.g. `09:30,13:30,18:30`. |
+| `db_list` / `prod_db` | Legacy — only used to seed `report_databases` on first run. Not read afterwards. |
 | `last_run_marker` | Internal — de-dups scheduler runs. Don't edit. |
 
 > **Security note:** `mail_pwd_b64` / `report_pwd_b64` are **base64 —
@@ -126,10 +138,37 @@ pip install -r requirements.txt   # needs the ODBC Driver 18 for SQL Server inst
 ## View / edit config
 
 ```bash
-python edit_config.py show      # print current config (passwords masked)
-python edit_config.py edit      # guided edit of every field
+python edit_config.py show      # print databases + their ranges, and mail settings
+python edit_config.py edit      # guided edit of mail / global settings
 python edit_config.py mailpwd   # rotate just the mail password
 ```
+
+## Per-database date ranges
+
+Each database has its **own** `start_date` / `end_date`. Set them with the
+`db-*` commands (or plain SQL). `end_date` is **exclusive**.
+
+```bash
+python edit_config.py db-list                              # show each DB + its range
+python edit_config.py db-set  abhi_mask   2026-07-01 2026-08-01   # July 2026
+python edit_config.py db-set  abhi_maskv2 2026-06-01 2026-07-01   # June 2026
+python edit_config.py db-set  abhi_maskv3 - -                     # clear -> use default/auto
+python edit_config.py db-add  abhi_maskv7 2026-01-01 2026-02-01   # add a new DB
+python edit_config.py db-prod abhi_mask                           # mark PROD (day-wise summary)
+python edit_config.py db-remove abhi_maskv6
+```
+
+Or straight SQL:
+
+```sql
+UPDATE dbo.report_databases SET start_date='2026-07-01', end_date='2026-08-01' WHERE db_name='abhi_mask';
+UPDATE dbo.report_databases SET start_date='2026-06-01', end_date='2026-07-01' WHERE db_name='abhi_maskv2';
+```
+
+**Range resolution per database:** its own range if both dates are set →
+otherwise the global `report_config` default range if set → otherwise
+current month to date. So leave a DB's dates `NULL` to have it roll with
+the month automatically, or pin an exact range just for that DB.
 
 ## Run
 

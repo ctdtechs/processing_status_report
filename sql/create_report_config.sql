@@ -71,5 +71,42 @@ BEGIN
 END
 GO
 
+-- =====================================================================
+-- Per-database table: one row per reporting database, each with its OWN
+-- date range. This is what lets every database use a different start/end.
+-- The app auto-creates this too and seeds it from report_config.db_list on
+-- first run, so creating it by hand is OPTIONAL.
+-- =====================================================================
+IF OBJECT_ID('dbo.report_databases', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.report_databases (
+        db_name     NVARCHAR(256) NOT NULL PRIMARY KEY,
+        start_date  DATE          NULL,   -- range start (inclusive); NULL -> fall back to global/auto
+        end_date    DATE          NULL,   -- range end   (exclusive); NULL -> fall back to global/auto
+        is_prod     BIT           NOT NULL CONSTRAINT DF_report_databases_prod    DEFAULT 0,
+        enabled     BIT           NOT NULL CONSTRAINT DF_report_databases_enabled DEFAULT 1,
+        sort_order  INT           NOT NULL CONSTRAINT DF_report_databases_sort    DEFAULT 0
+    );
+END
+GO
+
+-- Seed one row per database if empty. Adjust names/ranges as needed.
+IF NOT EXISTS (SELECT 1 FROM dbo.report_databases)
+BEGIN
+    INSERT INTO dbo.report_databases (db_name, start_date, end_date, is_prod, enabled, sort_order) VALUES
+        ('abhi_mask',   NULL, NULL, 1, 1, 0),
+        ('abhi_maskv2', NULL, NULL, 0, 1, 1),
+        ('abhi_maskv3', NULL, NULL, 0, 1, 2),
+        ('abhi_maskv4', NULL, NULL, 0, 1, 3),
+        ('abhi_maskv5', NULL, NULL, 0, 1, 4),
+        ('abhi_maskv6', NULL, NULL, 0, 1, 5);
+END
+GO
+
+-- Example: give each database its own date range (end_date is EXCLUSIVE)
+-- UPDATE dbo.report_databases SET start_date='2026-07-01', end_date='2026-08-01' WHERE db_name='abhi_mask';
+-- UPDATE dbo.report_databases SET start_date='2026-06-01', end_date='2026-07-01' WHERE db_name='abhi_maskv2';
+
 -- Recommended: restrict access to the service account only, e.g.
--- GRANT SELECT, UPDATE ON dbo.report_config TO [ABHIMASK];
+-- GRANT SELECT, UPDATE ON dbo.report_config    TO [ABHIMASK];
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.report_databases TO [ABHIMASK];

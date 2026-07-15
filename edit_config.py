@@ -2,21 +2,29 @@
 """
 edit_config.py
 
-Console tool to view and edit the single configuration row in the MSSQL
-``dbo.report_config`` table used by status_report.py -- so changing the
-date range, database list, mail settings, recipients or trigger times
-doesn't require touching any code or hand-writing SQL.
+Console tool to view and edit the configuration used by status_report.py,
+stored in MSSQL on the Prod SQL instance:
+  - dbo.report_config      one row: mail settings, recipients, triggers,
+                           optional global default date range
+  - dbo.report_databases   one row PER database, each with its OWN date range
 
-The config table lives on the Prod SQL instance; connection details come
-from environment variables (see app/config_store.py):
+Connection details for the config instance come from environment variables
+(a .env file in the project root is loaded automatically -- see .env.example):
 
     CONFIG_DB_SERVER  CONFIG_DB_NAME  CONFIG_DB_USER  CONFIG_DB_PWD
     (optional) CONFIG_DB_DRIVER
 
 Usage:
-    python edit_config.py show      # print current config (passwords masked)
-    python edit_config.py edit      # guided edit of every field
-    python edit_config.py mailpwd   # rotate just the mail password
+    python edit_config.py show                       # print all config
+    python edit_config.py edit                       # guided edit of mail/global settings
+    python edit_config.py mailpwd                    # rotate just the mail password
+
+    python edit_config.py db-list                    # list databases + their ranges
+    python edit_config.py db-set  <name> <start> <end>   # set a DB's date range
+                                                         # (use '-' for a date to clear it)
+    python edit_config.py db-add  <name> [start] [end]   # add a database
+    python edit_config.py db-prod <name>             # mark this DB as PROD
+    python edit_config.py db-remove <name>           # remove a database
 """
 
 import getpass
@@ -31,26 +39,41 @@ def _mask(secret: str) -> str:
     return f"{'*' * max(len(secret) - 2, 0)}{secret[-2:]}" if len(secret) > 2 else "**"
 
 
+def _print_db_table():
+    entries = cs.load_db_entries()
+    if not entries:
+        print("  (no databases configured -- add one with: python edit_config.py db-add <name>)")
+        return
+    print(f"  {'DATABASE':<20}{'START':<13}{'END (excl)':<13}{'PROD':<6}")
+    print(f"  {'-' * 18:<20}{'-' * 11:<13}{'-' * 11:<13}{'-' * 4:<6}")
+    for e in entries:
+        print(f"  {e.name:<20}{(e.start_date or '(default)'):<13}"
+              f"{(e.end_date or '(default)'):<13}{'YES' if e.is_prod else '':<6}")
+
+
 def cmd_show():
     cfg = cs.load_app_config()
-    print("Current configuration (dbo.report_config, id=1)")
-    print("-" * 60)
-    print(f"start_date    : {cfg.start_date or '(not set -> current month to date)'}")
-    print(f"end_date      : {cfg.end_date or '(not set -> current month to date)'}")
-    print(f"db_list       : {', '.join(cfg.db_list) or '(none)'}")
-    print(f"prod_db       : {cfg.prod_db or '(none)'}")
-    print(f"report_server : {cfg.report_server or '(use CONFIG_DB_SERVER)'}")
-    print(f"report_user   : {cfg.report_user or '(use CONFIG_DB_USER)'}")
-    print(f"report_pwd    : {_mask(cfg.report_pwd) if cfg.report_pwd else '(use CONFIG_DB_PWD)'}")
-    print(f"from_mail     : {cfg.from_mail or '(none)'}")
-    print(f"from_name     : {cfg.from_name or '(none)'}")
-    print(f"mail_pwd      : {_mask(cfg.mail_password)}  (stored base64)")
-    print(f"to_mails      : {cfg.to_mails or '(none)'}")
-    print(f"cc_mails      : {cfg.cc_mails or '(none)'}")
-    print(f"smtp_server   : {cfg.smtp_server}")
-    print(f"smtp_port     : {cfg.smtp_port}")
-    print(f"triggers      : {', '.join(cfg.triggers) or '(none)'}")
-    print(f"last_run      : {cfg.last_run_marker or '(never)'}")
+    print("Databases (dbo.report_databases) -- each with its own date range")
+    print("-" * 64)
+    _print_db_table()
+    print()
+    print("Global / mail settings (dbo.report_config, id=1)")
+    print("-" * 64)
+    print(f"default start_date : {cfg.start_date or '(none -> current month to date)'}")
+    print(f"default end_date   : {cfg.end_date or '(none -> current month to date)'}")
+    print(f"  (used only for databases whose own range is unset)")
+    print(f"report_server      : {cfg.report_server or '(use CONFIG_DB_SERVER)'}")
+    print(f"report_user        : {cfg.report_user or '(use CONFIG_DB_USER)'}")
+    print(f"report_pwd         : {_mask(cfg.report_pwd) if cfg.report_pwd else '(use CONFIG_DB_PWD)'}")
+    print(f"from_mail          : {cfg.from_mail or '(none)'}")
+    print(f"from_name          : {cfg.from_name or '(none)'}")
+    print(f"mail_pwd           : {_mask(cfg.mail_password)}  (stored base64)")
+    print(f"to_mails           : {cfg.to_mails or '(none)'}")
+    print(f"cc_mails           : {cfg.cc_mails or '(none)'}")
+    print(f"smtp_server        : {cfg.smtp_server}")
+    print(f"smtp_port          : {cfg.smtp_port}")
+    print(f"triggers           : {', '.join(cfg.triggers) or '(none)'}")
+    print(f"last_run           : {cfg.last_run_marker or '(never)'}")
 
 
 def _ask(label: str, current) -> str:
@@ -60,24 +83,20 @@ def _ask(label: str, current) -> str:
 
 
 def cmd_edit():
+    """Guided edit of the mail/global settings. Per-DB date ranges are managed
+    with the db-* commands (each database has its own range)."""
     cfg = cs.load_app_config()
-    print("Guided edit -- press Enter to keep the current value.\n")
+    print("Guided edit -- press Enter to keep the current value.")
+    print("(To set a database's date range, use: python edit_config.py db-set <name> <start> <end>)\n")
 
     updates = {}
 
-    v = _ask("Start date (YYYY-MM-DD, '-' to clear)", cfg.start_date)
+    v = _ask("Default start date (YYYY-MM-DD, '-' to clear)", cfg.start_date)
     if v:
         updates["start_date"] = None if v == "-" else v
-    v = _ask("End date (YYYY-MM-DD, exclusive, '-' to clear)", cfg.end_date)
+    v = _ask("Default end date (YYYY-MM-DD, exclusive, '-' to clear)", cfg.end_date)
     if v:
         updates["end_date"] = None if v == "-" else v
-
-    v = _ask("Database list (comma-separated)", ",".join(cfg.db_list))
-    if v:
-        updates["db_list"] = ",".join(p.strip() for p in v.split(",") if p.strip())
-    v = _ask("PROD database (for day-wise summary)", cfg.prod_db)
-    if v:
-        updates["prod_db"] = v
 
     v = _ask("Reporting server override ('-' to clear, blank to keep)", cfg.report_server)
     if v:
@@ -143,20 +162,90 @@ def cmd_mailpwd():
     print("Mail password updated (stored base64).")
 
 
+# --------------------------------------------------------------------- #
+# Per-database commands
+# --------------------------------------------------------------------- #
+def _date_arg(value: str):
+    """'-' clears the date (-> None); otherwise return the string as-is."""
+    return None if value == "-" else value
+
+
+def cmd_db_list():
+    print("Databases (dbo.report_databases):")
+    _print_db_table()
+
+
+def cmd_db_set(argv):
+    if len(argv) < 3:
+        name = input("Database name: ").strip()
+        start = input("Start date (YYYY-MM-DD, '-' to clear): ").strip()
+        end = input("End date (YYYY-MM-DD, exclusive, '-' to clear): ").strip()
+    else:
+        name, start, end = argv[0], argv[1], argv[2]
+    cs.set_db_range(name, _date_arg(start), _date_arg(end))
+    print(f"Set range for '{name}': {start} -> {end}")
+
+
+def cmd_db_add(argv):
+    name = argv[0] if argv else input("Database name: ").strip()
+    start = argv[1] if len(argv) > 1 else input("Start date (YYYY-MM-DD, blank = default): ").strip()
+    end = argv[2] if len(argv) > 2 else input("End date (YYYY-MM-DD, exclusive, blank = default): ").strip()
+    # Place new DB after existing ones.
+    existing = cs.load_db_entries()
+    sort_order = (max((e.sort_order for e in existing), default=-1)) + 1
+    cs.upsert_db_entry(name, _date_arg(start) if start else None,
+                       _date_arg(end) if end else None,
+                       is_prod=False, enabled=True, sort_order=sort_order)
+    print(f"Added '{name}'.")
+
+
+def cmd_db_prod(argv):
+    if not argv:
+        print("Usage: python edit_config.py db-prod <name>")
+        sys.exit(1)
+    cs.set_prod_db(argv[0])
+    print(f"'{argv[0]}' is now the PROD database (day-wise summary).")
+
+
+def cmd_db_remove(argv):
+    if not argv:
+        print("Usage: python edit_config.py db-remove <name>")
+        sys.exit(1)
+    name = argv[0]
+    if input(f"Remove database '{name}' from config? (y/n): ").strip().lower() == "y":
+        cs.delete_db_entry(name)
+        print("Removed.")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
 
     cmd = sys.argv[1]
-    if cmd == "show":
-        cmd_show()
-    elif cmd == "edit":
-        cmd_edit()
-    elif cmd == "mailpwd":
-        cmd_mailpwd()
-    else:
-        print(__doc__)
+    rest = sys.argv[2:]
+    try:
+        if cmd == "show":
+            cmd_show()
+        elif cmd == "edit":
+            cmd_edit()
+        elif cmd == "mailpwd":
+            cmd_mailpwd()
+        elif cmd == "db-list":
+            cmd_db_list()
+        elif cmd == "db-set":
+            cmd_db_set(rest)
+        elif cmd == "db-add":
+            cmd_db_add(rest)
+        elif cmd == "db-prod":
+            cmd_db_prod(rest)
+        elif cmd == "db-remove":
+            cmd_db_remove(rest)
+        else:
+            print(__doc__)
+            sys.exit(1)
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
 

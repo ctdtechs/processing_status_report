@@ -8,7 +8,9 @@
       "Bash(python -m py_compile app/report.py)",
       "Bash(python preview.py)",
       "Bash(python -m py_compile status_report.py edit_config.py app/*.py)",
-      "Bash(python -m py_compile app/config_store.py)"
+      "Bash(python -m py_compile app/config_store.py)",
+      "Bash(python -m py_compile app/config_store.py edit_config.py status_report.py)",
+      "Bash(python -m py_compile app/config_store.py edit_config.py status_report.py app/report.py app/db.py app/mailer.py)"
     ]
   }
 }

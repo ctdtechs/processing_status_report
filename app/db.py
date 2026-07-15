@@ -174,6 +174,7 @@ def run_storage_file_paths(cfg: cs.DbConfig, start_date: str, end_date: str) -> 
         ("input", queries.STORAGE_INPUT_PATHS_SQL),
         ("notfound", queries.STORAGE_NOTFOUND_PATHS_SQL),
         ("found", queries.STORAGE_FOUND_PATHS_SQL),
+        ("extracted", queries.STORAGE_EXTRACTED_PATHS_SQL),
     ):
         r = _run_with_retry(cfg, f"storage-{key}-paths query", _make_run(sql))
         result[key] = r if r is not None else {"rows": 0, "paths": []}

@@ -197,7 +197,7 @@ def _compute_sizes(app_cfg):
 
     sizes = {}
     total_missing = 0
-    for key in ("input", "notfound", "found"):
+    for key in ("input", "notfound", "found", "extracted"):
         gb, missing = _sum_path_sizes(data[key]["paths"])
         sizes[key] = {"gb": gb, "files": data[key]["rows"], "missing": missing}
         total_missing += missing

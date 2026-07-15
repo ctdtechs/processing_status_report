@@ -180,3 +180,11 @@ SELECT ed.extractedFilePath, ed.pickleInputPath, ed.pickleOutputPath
    AND ed.fileId IN (SELECT id FROM dbo.files
                       WHERE uploaded_at >= @StartDate AND uploaded_at < @EndDate);
 """
+
+# extractedFilePath for ALL files in the range (any outputFilePrepration).
+STORAGE_EXTRACTED_PATHS_SQL = _STORAGE_SQL_HEAD + """
+SELECT ed.extractedFilePath
+  FROM dbo.extractionDetails ed
+ WHERE ed.fileId IN (SELECT id FROM dbo.files
+                      WHERE uploaded_at >= @StartDate AND uploaded_at < @EndDate);
+"""

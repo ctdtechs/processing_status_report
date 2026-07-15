@@ -385,6 +385,7 @@ def build_storage_email_html(
         ["Input File Size", _size_cell(sizes.get("input"))],
         ["Aadhaar not found", _size_cell(sizes.get("notfound"))],
         ["Aadhaar found", _size_cell(sizes.get("found"))],
+        ["Extracted Files Size", _size_cell(sizes.get("extracted"))],
     ]
     server_table = _newsletter_table(["Server &amp; Storage", "Value"], server_rows)
 
@@ -409,15 +410,6 @@ def build_storage_email_html(
         ["Physical cores", str(metrics.get("physical_cores") or "N/A")],
     ]
     cpu_summary_table = _newsletter_table(["CPU", "Value"], cpu_rows)
-
-    per_core = metrics.get("per_core")
-    if per_core:
-        core_rows = [[f"Core {i}", f"{p:.1f}%"] for i, p in enumerate(per_core)]
-        core_table = _newsletter_table(["Core", "Utilization"], core_rows)
-    else:
-        core_table = (f'<p style="font-family:{_FONT};font-size:12px;color:{_MUTED};'
-                      'font-style:italic;margin:6px 0;">Per-core detail unavailable '
-                      '(install psutil for per-core utilization).</p>')
 
     # --- Callout ---
     if over_threshold:
@@ -473,7 +465,6 @@ def build_storage_email_html(
 
       {_section_heading("CPU Utilization")}
       {cpu_summary_table}
-      {core_table}
 
       <p style="margin:28px 0 2px;font-family:{_FONT};font-size:14px;color:{_INK};">Regards,</p>
       <p style="margin:0;font-family:{_FONT};font-size:14px;font-weight:700;color:{_BRAND};">{signature_name}</p>

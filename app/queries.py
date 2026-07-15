@@ -105,14 +105,9 @@ SELECT
         END) AS [ID Pending],
 
     SUM(CASE
-            WHEN A.maskingStatus = 'Aadhar found'
-            THEN 1 ELSE 0
-        END) AS [Aadhaar Found],
-
-    SUM(CASE
             WHEN A.processingStatus = 'Completed'
             THEN 1 ELSE 0
-        END) AS [Masking Completed],
+        END) AS [Aadhaar Found],
 
     SUM(CASE
             WHEN A.outputFilePrepration = 'Completed'
@@ -139,5 +134,5 @@ ORDER BY CAST(B.uploaded_at AS DATE);
 
 DAILY_STATUS_COLUMNS = [
     "Date", "Total", "ID Completed", "ID Pending",
-    "Aadhaar Found", "Masking Completed", "Output Completed", "Upload Completed",
+    "Aadhaar Found", "Output Completed", "Upload Completed",
 ]

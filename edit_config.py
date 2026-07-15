@@ -21,7 +21,8 @@ Usage:
 
     python edit_config.py db-list                    # list databases + their ranges
     python edit_config.py db-set  <name> <start> <end>   # set a DB's date range
-                                                         # (use '-' for a date to clear it)
+                                                         # ('-' clears a date; a cleared END
+                                                         #  rolls to "today" on every run)
     python edit_config.py db-add  <name> [start] [end]   # add a database
     python edit_config.py db-prod <name>             # mark this DB as PROD
     python edit_config.py db-remove <name>           # remove a database

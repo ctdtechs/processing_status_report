@@ -317,22 +317,13 @@ def run_config_driven(app_cfg: cs.AppConfig, db_configs: dict):
                   "Add one with: python edit_config.py db-add")
         return False
 
-    # Per-DB date range: each DB uses its own range from dbo.report_databases;
-    # if a DB has no range, fall back to the global report_config range, then
-    # to current month to date.
+    # Per-DB date range: each DB uses its own range from dbo.report_databases.
+    # Each bound resolves independently -- a blank end_date rolls to today,
+    # a blank start_date falls back to the global default / 1st of the month.
     entries = {e.name: e for e in cs.load_db_entries()}
-    default_range = current_month_to_date_range()
 
     selected_dbs = list(db_configs.keys())
-    date_ranges = {}
-    for k in selected_dbs:
-        entry = entries.get(k)
-        rng = cs.resolve_date_range(entry, app_cfg) if entry else None
-        if rng is None:
-            rng = default_range
-            log.info(f"[{k}] no date range set -- defaulting to current month to date "
-                     f"[{rng[0]} -> {rng[1]}].")
-        date_ranges[k] = rng
+    date_ranges = {k: cs.resolve_date_range(entries.get(k), app_cfg) for k in selected_dbs}
 
     results = {}
     for k in selected_dbs:

@@ -165,10 +165,21 @@ UPDATE dbo.report_databases SET start_date='2026-07-01', end_date='2026-08-01' W
 UPDATE dbo.report_databases SET start_date='2026-06-01', end_date='2026-07-01' WHERE db_name='abhi_maskv2';
 ```
 
-**Range resolution per database:** its own range if both dates are set →
-otherwise the global `report_config` default range if set → otherwise
-current month to date. So leave a DB's dates `NULL` to have it roll with
-the month automatically, or pin an exact range just for that DB.
+**Range resolution per database** — each bound resolves independently:
+- **start** = the DB's own `start_date` → global default start → 1st of the current month.
+- **end** = the DB's own `end_date` → global default end → **tomorrow** (exclusive, so it includes today).
+
+**Want a rolling "up to today" end?** Leave `end_date` **blank (NULL)** —
+the app fills in today automatically on every run:
+
+```bash
+python edit_config.py db-set abhi_mask 2026-07-01 -    # from 2026-07-01 through today, rolling
+```
+
+> **Don't** put `GETDATE()` in `end_date`. It's a `DATE` column, so it
+> stores a fixed value (frozen to the day you set it, not re-evaluated),
+> and because the bound is *exclusive* it would drop today's rows. A blank
+> `end_date` is the correct "today" behavior.
 
 ## Run
 

@@ -68,7 +68,7 @@ import binascii
 import os
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 try:
@@ -481,16 +481,31 @@ def load_db_configs(app_cfg: Optional[AppConfig] = None) -> Dict[str, DbConfig]:
     return result
 
 
-def resolve_date_range(entry: DbEntry, app_cfg: AppConfig):
-    """The effective (start, end) for a DB: its own range if both set, else
-    the global report_config range if both set, else None (caller decides a
-    default, e.g. current month to date). Returns a (start, end) tuple or None.
+def resolve_date_range(entry: Optional[DbEntry], app_cfg: AppConfig):
+    """The effective (start, end) for a DB, resolving each bound INDEPENDENTLY
+    so a fixed start with a rolling "today" end works.
+
+    start : the DB's own start_date -> the global default start -> the 1st of
+            the current month.
+    end   : the DB's own end_date -> the global default end -> tomorrow
+            (exclusive upper bound, so it INCLUDES everything up to today).
+
+    So to get "from a fixed date through today", set start_date and leave
+    end_date blank (NULL) -- do NOT store GETDATE(); a DATE column can't
+    re-evaluate, and being exclusive it would drop today's rows.
+    Returns a (start, end) tuple; never None.
     """
-    if entry.start_date and entry.end_date:
-        return entry.start_date, entry.end_date
-    if app_cfg.start_date and app_cfg.end_date:
-        return app_cfg.start_date, app_cfg.end_date
-    return None
+    today = date.today()
+
+    start = (entry.start_date if entry and entry.start_date else None) or app_cfg.start_date
+    if not start:
+        start = today.replace(day=1).strftime("%Y-%m-%d")
+
+    end = (entry.end_date if entry and entry.end_date else None) or app_cfg.end_date
+    if not end:
+        end = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    return start, end
 
 
 def get_prod_db_key(db_configs: Dict[str, DbConfig]) -> Optional[str]:

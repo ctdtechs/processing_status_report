@@ -1,0 +1,9 @@
+# Credentials -- never commit these
+config/config_store.sqlite3
+config/config_store.key
+
+# Logs
+status_report.log
+
+__pycache__/
+*.pyc

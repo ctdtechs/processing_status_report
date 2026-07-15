@@ -71,8 +71,15 @@ RUN MODES
                                        # configured trigger time is due now
     python status_report.py --force    # config-driven; runs immediately
 
+    # --auto / --force run BOTH emails by default. Restrict with:
+    python status_report.py --auto --status     # processing-status email only
+    python status_report.py --auto --storage    # storage/system alert only
+        (the storage alert is threshold-driven: it only sends when the
+         configured mount crosses STORAGE_THRESHOLD_PCT, re-alerting at most
+         once every STORAGE_REMINDER_HOURS -- see app/storage_alert.py)
+
 Requirements:
-    pip install pyodbc
+    pip install pyodbc psutil
 """
 
 import argparse
@@ -515,19 +522,42 @@ def parse_args(argv):
                    help=f"Minutes after a configured trigger time within which "
                         f"--auto will still send (set >= your cron interval; "
                         f"default {DEFAULT_TRIGGER_GRACE_MIN}).")
+    # Which email(s) to run. If neither is given, BOTH run (each still gated
+    # by its own rules -- status by triggers, storage by threshold).
+    p.add_argument("--status", action="store_true",
+                   help="Run only the processing-status report email.")
+    p.add_argument("--storage", action="store_true",
+                   help="Run only the storage & system alert email.")
     return p.parse_args(argv)
 
 
 def main():
     args = parse_args(sys.argv[1:])
-    if args.auto or args.force:
-        try:
-            sys.exit(run_auto(force=args.force, grace_min=args.grace))
-        except Exception as e:
-            log.error(f"Auto run failed: {e}")
-            sys.exit(1)
-    else:
+    if not (args.auto or args.force):
         main_interactive()
+        return
+
+    # Selectors: neither flag -> both; one flag -> just that one.
+    want_status = args.status or not (args.status or args.storage)
+    want_storage = args.storage or not (args.status or args.storage)
+
+    rc = 0
+    if want_status:
+        try:
+            rc |= run_auto(force=args.force, grace_min=args.grace)
+        except Exception as e:
+            log.error(f"Status report run failed: {e}")
+            rc |= 1
+    if want_storage:
+        try:
+            from app import storage_alert
+            ok = storage_alert.run_storage_alert(force=args.force)
+            rc |= 0 if ok else 1
+        except Exception as e:
+            log.error(f"Storage alert run failed: {e}")
+            rc |= 1
+
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

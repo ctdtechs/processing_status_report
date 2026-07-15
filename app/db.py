@@ -144,3 +144,37 @@ def run_daily_status_query(cfg: cs.DbConfig, start_date: str, end_date: str) -> 
 
     result = _run_with_retry(cfg, "daily-status query", _run)
     return result if result is not None else []
+
+
+def run_storage_file_paths(cfg: cs.DbConfig, start_date: str, end_date: str) -> dict:
+    """Fetches the file paths used to compute storage sizes. Returns:
+        {
+          'input':    {'rows': n, 'paths': [...]},
+          'notfound': {'rows': n, 'paths': [...]},
+          'found':    {'rows': n, 'paths': [...]},
+        }
+    'rows' is the number of DB rows (files); 'paths' is every non-empty path
+    cell across those rows (a not-found/found row contributes up to 3 paths).
+    The caller stats each path on disk to sum sizes."""
+
+    def _make_run(sql):
+        def _run(cursor):
+            cursor.execute(sql.format(lock_timeout_ms=LOCK_TIMEOUT_MS), start_date, end_date)
+            paths, rows = [], 0
+            for row in cursor.fetchall():
+                rows += 1
+                for cell in row:
+                    if cell and str(cell).strip():
+                        paths.append(str(cell).strip())
+            return {"rows": rows, "paths": paths}
+        return _run
+
+    result = {}
+    for key, sql in (
+        ("input", queries.STORAGE_INPUT_PATHS_SQL),
+        ("notfound", queries.STORAGE_NOTFOUND_PATHS_SQL),
+        ("found", queries.STORAGE_FOUND_PATHS_SQL),
+    ):
+        r = _run_with_retry(cfg, f"storage-{key}-paths query", _make_run(sql))
+        result[key] = r if r is not None else {"rows": 0, "paths": []}
+    return result

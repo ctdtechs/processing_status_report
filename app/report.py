@@ -320,3 +320,175 @@ def build_email_html(
 </table>
 """
     return html
+
+
+# ------------------------------------------------------------------------- #
+# Storage & system alert email (separate from the processing-status report)
+# ------------------------------------------------------------------------- #
+def _fmt_gb(value) -> str:
+    return f"{value:,.2f} GB" if value is not None else "N/A"
+
+
+def _callout(text: str, danger: bool) -> str:
+    bg = "#fdecec" if danger else "#fef7e6"
+    bar = _BRAND if danger else _ACCENT
+    color = _BRAND_DARK if danger else "#7a5a00"
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:8px 0 4px;"><tr><td style="background:{bg};'
+        f'border-left:5px solid {bar};padding:12px 16px;font-family:{_FONT};'
+        f'font-size:13px;font-weight:600;color:{color};">{text}</td></tr></table>'
+    )
+
+
+def _size_cell(entry) -> str:
+    """'12.34 GB (56 files)' from a sizes entry, or 'N/A' if missing."""
+    if not entry:
+        return "N/A"
+    txt = _fmt_gb(entry.get("gb"))
+    files = entry.get("files")
+    if files is not None:
+        txt += f' ({files:,} file{"s" if files != 1 else ""})'
+    return txt
+
+
+def build_storage_email_html(
+    metrics: dict,
+    sizes: dict,
+    range_start,
+    range_end,
+    threshold_pct: float,
+    over_threshold: bool,
+    signature_name: str = SIGNATURE_NAME,
+) -> str:
+    """Newsletter-style storage + system alert email body.
+
+    `sizes` maps 'input' / 'notfound' / 'found' -> {'gb','files','missing'},
+    computed from summing on-disk sizes of the DB-referenced file paths.
+    """
+    host = metrics.get("hostname", "server")
+    ip = metrics.get("ip", "N/A")
+    mount = metrics.get("mount", "/data")
+    used_pct = metrics.get("used_pct", 0.0)
+    now = datetime.now()
+    report_date = now.strftime("%d-%b-%Y %H:%M")
+    range_note = (f"{range_start} &rarr; {range_end}"
+                  if range_start and range_end else "N/A")
+
+    # --- Server & storage (matches the requested layout) ---
+    server_rows = [
+        ["Server", host],
+        ["IP Address", ip],
+        ["Date", report_date],
+        [f"Total size ({mount})", _fmt_gb(metrics.get("total_gb"))],
+        ["Occupied", f'{_fmt_gb(metrics.get("occupied_gb"))} ({used_pct:.1f}%)'],
+        ["Input File Size", _size_cell(sizes.get("input"))],
+        ["Aadhaar not found", _size_cell(sizes.get("notfound"))],
+        ["Aadhaar found", _size_cell(sizes.get("found"))],
+    ]
+    server_table = _newsletter_table(["Server &amp; Storage", "Value"], server_rows)
+
+    sizes_note = ""
+    if sizes:
+        total_missing = sum(v.get("missing", 0) for v in sizes.values())
+        sizes_note = (
+            f'<p style="font-family:{_FONT};font-size:11px;color:{_MUTED};margin:2px 0 0;">'
+            f'File sizes summed from DB paths over {range_note}.'
+            + (f' {total_missing:,} referenced file(s) not found on disk were skipped.'
+               if total_missing else "")
+            + "</p>"
+        )
+
+    # --- CPU ---
+    load = metrics.get("load_avg")
+    load_str = " / ".join(f"{x:.2f}" for x in load) if load else "N/A"
+    cpu_rows = [
+        ["Overall utilization", f'{metrics.get("cpu_overall_pct", 0.0):.1f}%'],
+        ["Load average (1 / 5 / 15 min)", load_str],
+        ["Logical cores", str(metrics.get("logical_cores") or "N/A")],
+        ["Physical cores", str(metrics.get("physical_cores") or "N/A")],
+    ]
+    cpu_summary_table = _newsletter_table(["CPU", "Value"], cpu_rows)
+
+    per_core = metrics.get("per_core")
+    if per_core:
+        core_rows = [[f"Core {i}", f"{p:.1f}%"] for i, p in enumerate(per_core)]
+        core_table = _newsletter_table(["Core", "Utilization"], core_rows)
+    else:
+        core_table = (f'<p style="font-family:{_FONT};font-size:12px;color:{_MUTED};'
+                      'font-style:italic;margin:6px 0;">Per-core detail unavailable '
+                      '(install psutil for per-core utilization).</p>')
+
+    # --- Callout ---
+    if over_threshold:
+        callout = _callout(
+            f"&#9888; {mount} usage is {used_pct:.1f}% &mdash; over the "
+            f"{threshold_pct:.0f}% threshold. Free up space to avoid disruption.",
+            danger=True,
+        )
+        title = "Storage &amp; System Alert"
+    else:
+        callout = _callout(
+            f"{mount} usage is {used_pct:.1f}% (threshold {threshold_pct:.0f}%).",
+            danger=False,
+        )
+        title = "Storage &amp; System Report"
+
+    preheader = f"{mount} at {used_pct:.0f}% on {host}"
+
+    html = f"""\
+<!-- preheader (hidden in most clients) -->
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="width:100%;background:#ffffff;margin:0;padding:0;">
+
+  <!-- Header banner -->
+  <tr>
+    <td style="background:{_BRAND};border-bottom:4px solid {_ACCENT};padding:22px 32px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="font-family:{_FONT};color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.2px;">
+            {title}
+          </td>
+          <td align="right" style="font-family:{_FONT};color:{_ON_BRAND};font-size:13px;white-space:nowrap;">
+            {report_date}
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" style="font-family:{_FONT};color:{_ON_BRAND};font-size:12px;padding-top:4px;">
+            Server: {host} ({ip}) &mdash; mount {mount}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- Body -->
+  <tr>
+    <td style="padding:22px 32px 8px;">
+      {callout}
+
+      {_section_heading("Server &amp; Storage")}
+      {server_table}
+      {sizes_note}
+
+      {_section_heading("CPU Utilization")}
+      {cpu_summary_table}
+      {core_table}
+
+      <p style="margin:28px 0 2px;font-family:{_FONT};font-size:14px;color:{_INK};">Regards,</p>
+      <p style="margin:0;font-family:{_FONT};font-size:14px;font-weight:700;color:{_BRAND};">{signature_name}</p>
+    </td>
+  </tr>
+
+  <!-- Footer -->
+  <tr>
+    <td style="padding:16px 32px 22px;border-top:2px solid {_ACCENT};">
+      <p style="margin:0;font-family:{_FONT};font-size:11px;color:{_MUTED};line-height:1.5;">
+        Automated storage &amp; system alert generated on {report_date}. Please do not reply to this email.
+      </p>
+    </td>
+  </tr>
+
+</table>
+"""
+    return html

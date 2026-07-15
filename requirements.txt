@@ -1,1 +1,2 @@
 pyodbc>=5.0
+psutil>=5.9    # storage/CPU metrics for the --storage alert (optional; falls back to /proc)

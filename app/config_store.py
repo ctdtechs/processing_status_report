@@ -205,6 +205,13 @@ def b64_decode(encoded: str) -> str:
 # ------------------------------------------------------------------ #
 # Bootstrap connection to the Prod SQL instance (env-driven)
 # ------------------------------------------------------------------ #
+def load_dotenv():
+    """Public: ensure the project .env has been loaded into os.environ.
+    Safe to call repeatedly (loads once). Used by modules that read env
+    vars directly (e.g. storage_alert) before any DB call."""
+    _load_dotenv()
+
+
 def _bootstrap_env() -> Dict[str, str]:
     _load_dotenv()
     missing = [

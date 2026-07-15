@@ -236,6 +236,55 @@ running every ~10 min, `Program: python`, `Arguments:
 C:\path\to\status_report.py --auto`, with the `CONFIG_DB_*` env vars set
 for the task's service account.
 
+## Storage & system alert (separate email)
+
+A **second, independent email** — never combined with the processing-status
+report — covering server storage, CPU, and a few pipeline file counts. It is
+**threshold-driven**: it emails only when the watched mount (default `/data`)
+crosses `STORAGE_THRESHOLD_PCT`, and re-alerts at most once every
+`STORAGE_REMINDER_HOURS` while still over (de-duped via a small state file).
+
+Contents: Server (hostname), IP Address, Date · Total size / Occupied `/data` ·
+Input File Size · Aadhaar found · Aadhaar not found · CPU utilization with
+per-core detail.
+
+The **GB figures are computed from the DB file paths** — `files.file_path`
+(queued) and `extractionDetails.{extractedFilePath, pickleInputPath,
+pickleOutputPath}` (not-found / completed) over the PROD DB's date range —
+by summing each file's on-disk size. Files referenced but missing on disk are
+skipped and noted.
+
+Threshold/mount/reminder settings live in `.env`
+(see [.env.example](.env.example)): `STORAGE_ALERT_ENABLED`, `STORAGE_MOUNT`,
+`STORAGE_THRESHOLD_PCT`, `STORAGE_REMINDER_HOURS`. **Recipients and SMTP come
+from `dbo.report_config`** — the storage alert uses the **same `to_mails` /
+`cc_mails`** as the processing-status report (no separate storage recipients).
+
+```bash
+python status_report.py --storage           # threshold-driven send (for cron)
+python status_report.py --storage --force   # send now regardless of threshold (test)
+```
+
+`--auto` runs **both** the status report and the storage alert by default;
+narrow it with `--status` or `--storage`. Needs `psutil` (`pip install psutil`);
+without it, CPU falls back to `/proc` and per-core detail is omitted.
+
+## Multiple To / Cc recipients
+
+**Both** the status report and the storage alert use the **same recipients**
+from `dbo.report_config` — `to_mails` / `cc_mails` — and both accept
+**multiple addresses** separated by `,` **or** `;`:
+
+```sql
+UPDATE dbo.report_config
+   SET to_mails = 'lead@ctdtechs.com; ops@ctdtechs.com, qa@ctdtechs.com',
+       cc_mails = 'manager@ctdtechs.com'
+ WHERE id = 1;
+```
+
+or via `python edit_config.py edit` (the To/Cc prompts). Duplicates are
+removed automatically, and any address already in To is dropped from Cc.
+
 ## Recommended indexes
 
 Ask your DBA to add these if not already present:

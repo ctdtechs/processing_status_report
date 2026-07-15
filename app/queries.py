@@ -136,3 +136,47 @@ DAILY_STATUS_COLUMNS = [
     "Date", "Total", "ID Completed", "ID Pending",
     "Aadhaar Found", "Output Completed", "Upload Completed",
 ]
+
+
+# ------------------------------------------------------------------------- #
+# Storage-alert file PATHS. The alert sums the on-disk size of every path
+# these return (the app stats each file). Range is [@StartDate, @EndDate) to
+# match the rest of the app (index-friendly; avoids CAST(... AS DATE) per row).
+#
+#   INPUT     -> files.file_path where processing_status = 'queued'
+#   NOTFOUND  -> extractionDetails.{extractedFilePath, pickleInputPath,
+#                pickleOutputPath} where outputFilePrepration in
+#                ('not applicable','aadhaar not found')
+#   FOUND     -> same three columns where outputFilePrepration = 'completed'
+# ------------------------------------------------------------------------- #
+_STORAGE_SQL_HEAD = """
+SET NOCOUNT ON;
+SET LOCK_TIMEOUT {lock_timeout_ms};
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+DECLARE @StartDate DATE = ?;
+DECLARE @EndDate   DATE = ?;  -- exclusive upper bound
+"""
+
+STORAGE_INPUT_PATHS_SQL = _STORAGE_SQL_HEAD + """
+SELECT file_path
+  FROM dbo.files
+ WHERE LOWER(processing_status) = 'queued'
+   AND uploaded_at >= @StartDate AND uploaded_at < @EndDate;
+"""
+
+STORAGE_NOTFOUND_PATHS_SQL = _STORAGE_SQL_HEAD + """
+SELECT ed.extractedFilePath, ed.pickleInputPath, ed.pickleOutputPath
+  FROM dbo.extractionDetails ed
+ WHERE LOWER(ed.outputFilePrepration) IN ('not applicable','aadhaar not found')
+   AND ed.fileId IN (SELECT id FROM dbo.files
+                      WHERE uploaded_at >= @StartDate AND uploaded_at < @EndDate);
+"""
+
+STORAGE_FOUND_PATHS_SQL = _STORAGE_SQL_HEAD + """
+SELECT ed.extractedFilePath, ed.pickleInputPath, ed.pickleOutputPath
+  FROM dbo.extractionDetails ed
+ WHERE LOWER(ed.outputFilePrepration) = 'completed'
+   AND ed.fileId IN (SELECT id FROM dbo.files
+                      WHERE uploaded_at >= @StartDate AND uploaded_at < @EndDate);
+"""

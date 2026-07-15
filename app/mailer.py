@@ -17,8 +17,18 @@ from . import config_store as cs
 
 
 def parse_addr_list(raw: str) -> list:
-    """Splits a semicolon-separated address string into a clean list."""
-    return [a.strip() for a in raw.split(";") if a.strip()]
+    """Splits an address string into a clean list. Accepts BOTH ';' and ','
+    as separators, so 'a@x.com; b@x.com, c@x.com' all parse correctly.
+    Duplicates are removed while preserving order."""
+    if not raw:
+        return []
+    parts = raw.replace(",", ";").split(";")
+    seen = {}
+    for p in parts:
+        p = p.strip()
+        if p:
+            seen.setdefault(p, None)
+    return list(seen.keys())
 
 
 def send_report_email(mail_cfg: cs.MailConfig, html_body: str, subject: str, to_list: list, cc_list: list):

@@ -12,7 +12,10 @@
       "Bash(python -m py_compile app/config_store.py edit_config.py status_report.py)",
       "Bash(python -m py_compile app/config_store.py edit_config.py status_report.py app/report.py app/db.py app/mailer.py)",
       "Bash(python -m py_compile app/config_store.py status_report.py)",
-      "Bash(python -m py_compile app/config_store.py status_report.py edit_config.py)"
+      "Bash(python -m py_compile app/config_store.py status_report.py edit_config.py)",
+      "Bash(python -m py_compile app/queries.py app/db.py app/storage_alert.py app/report.py app/mailer.py app/config_store.py status_report.py edit_config.py)",
+      "Bash(python preview_storage.py)",
+      "Bash(python -m py_compile app/*.py status_report.py edit_config.py)"
     ]
   }
 }

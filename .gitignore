@@ -2,6 +2,9 @@
 # MUST NOT be committed. .env.example (the template) is committed.
 .env
 
+# Storage-alert reminder state (runtime)
+.psr_storage_state.json
+
 # Logs
 status_report.log
 

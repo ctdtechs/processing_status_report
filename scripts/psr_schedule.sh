@@ -16,4 +16,6 @@ trap 'rm -f "$LOCK_FILE"' EXIT
 cd "$PROJECT_DIR" || { echo "[$(date)] cd to $PROJECT_DIR failed" >> "$LOG_FILE"; exit 1; }
 
 source "$VENV_PATH/bin/activate"
-python3.11 "$SCRIPT_PATH" --auto --grace 15 >> "$LOG_FILE" 2>&1
+# --status --storage triggers BOTH emails: the processing-status report
+# (sends on its trigger times) AND the storage alert (sends on threshold).
+python3.11 "$SCRIPT_PATH" --auto --status --storage --grace 15 >> "$LOG_FILE" 2>&1

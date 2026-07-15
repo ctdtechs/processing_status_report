@@ -395,8 +395,6 @@ def build_storage_email_html(
         sizes_note = (
             f'<p style="font-family:{_FONT};font-size:11px;color:{_MUTED};margin:2px 0 0;">'
             f'File sizes summed from DB paths over {range_note}.'
-            + (f' {total_missing:,} referenced file(s) not found on disk were skipped.'
-               if total_missing else "")
             + "</p>"
         )
 

@@ -80,6 +80,51 @@ except ImportError:
 DEFAULT_ODBC_DRIVER = "ODBC Driver 18 for SQL Server"
 CONFIG_ROW_ID = 1
 
+# app/config_store.py -> project root is one level up. A .env there (or the
+# path in CONFIG_ENV_FILE) is loaded automatically so the CONFIG_DB_* values
+# don't have to be exported by hand every session.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DOTENV_LOADED = False
+
+
+def _load_dotenv():
+    """Minimal .env loader (no external dependency).
+
+    Reads KEY=VALUE lines from <project_root>/.env (or $CONFIG_ENV_FILE),
+    ignoring blank lines and '#' comments, tolerating an optional 'export '
+    prefix and surrounding quotes. Real environment variables always win --
+    a value already present in the environment is never overwritten.
+    """
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    _DOTENV_LOADED = True
+
+    path = os.environ.get("CONFIG_ENV_FILE", os.path.join(_PROJECT_ROOT, ".env"))
+    if not os.path.isfile(path):
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.lower().startswith("export "):
+                    line = line[len("export "):].lstrip()
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if (len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"')):
+                    value = value[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        # A missing/unreadable .env is not fatal -- fall back to real env vars.
+        pass
+
 
 # ------------------------------------------------------------------ #
 # Dataclasses -- the shapes the rest of the app depends on.
@@ -150,20 +195,29 @@ def b64_decode(encoded: str) -> str:
 # Bootstrap connection to the Prod SQL instance (env-driven)
 # ------------------------------------------------------------------ #
 def _bootstrap_env() -> Dict[str, str]:
+    _load_dotenv()
     missing = [
         name for name in ("CONFIG_DB_SERVER", "CONFIG_DB_NAME", "CONFIG_DB_USER", "CONFIG_DB_PWD")
         if not os.environ.get(name)
     ]
     if missing:
+        env_path = os.environ.get("CONFIG_ENV_FILE", os.path.join(_PROJECT_ROOT, ".env"))
         raise RuntimeError(
             "Missing required environment variable(s) for the config DB: "
             + ", ".join(missing)
-            + ".\nSet CONFIG_DB_SERVER, CONFIG_DB_NAME, CONFIG_DB_USER, CONFIG_DB_PWD "
-            "(optionally CONFIG_DB_DRIVER) before running. Example (PowerShell):\n"
-            '  $env:CONFIG_DB_SERVER = "10.21.42.17,7865"\n'
-            '  $env:CONFIG_DB_NAME   = "master"\n'
-            '  $env:CONFIG_DB_USER   = "ABHIMASK"\n'
-            '  $env:CONFIG_DB_PWD    = "***"'
+            + ".\nEither create a .env file at:\n"
+            f"    {env_path}\n"
+            "  with:\n"
+            "    CONFIG_DB_SERVER=10.21.42.17,7865\n"
+            "    CONFIG_DB_NAME=master\n"
+            "    CONFIG_DB_USER=ABHIMASK\n"
+            "    CONFIG_DB_PWD=your-password\n"
+            "    # CONFIG_DB_DRIVER=ODBC Driver 18 for SQL Server\n"
+            "  or export them in the shell (Linux/bash):\n"
+            '    export CONFIG_DB_SERVER="10.21.42.17,7865"\n'
+            '    export CONFIG_DB_NAME="master"\n'
+            '    export CONFIG_DB_USER="ABHIMASK"\n'
+            '    export CONFIG_DB_PWD="your-password"'
         )
     return {
         "server": os.environ["CONFIG_DB_SERVER"],

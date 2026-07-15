@@ -1,5 +1,6 @@
-# Config now lives in MSSQL (dbo.report_config) + env vars -- no local
-# secret files to ignore. Bootstrap creds come from CONFIG_DB_* env vars.
+# Bootstrap creds for the config DB. .env holds the CONFIG_DB_* values and
+# MUST NOT be committed. .env.example (the template) is committed.
+.env
 
 # Logs
 status_report.log

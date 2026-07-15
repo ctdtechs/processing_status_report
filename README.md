@@ -47,7 +47,7 @@ down permissions first.
 ### Bootstrap connection (environment variables)
 
 The config table is on the Prod instance, so its connection details can't
-live in the table. Set these env vars before running anything:
+live in the table. Provide them via these variables:
 
 | Variable | Example |
 | --- | --- |
@@ -57,6 +57,31 @@ live in the table. Set these env vars before running anything:
 | `CONFIG_DB_PWD` | `***` |
 | `CONFIG_DB_DRIVER` | *(optional)* `ODBC Driver 18 for SQL Server` |
 
+**Easiest: a `.env` file** (loaded automatically, no extra dependency).
+Copy the template and fill it in:
+
+```bash
+cp .env.example .env
+# then edit .env:
+#   CONFIG_DB_SERVER=10.21.42.17,7865
+#   CONFIG_DB_NAME=master
+#   CONFIG_DB_USER=ABHIMASK
+#   CONFIG_DB_PWD=your-password
+```
+
+`.env` lives in the project root (next to `status_report.py`) and is
+git-ignored. Point elsewhere with `CONFIG_ENV_FILE=/path/to/env`. Real
+shell environment variables, if set, take precedence over `.env`.
+
+**Or export them in the shell** — Linux/bash:
+
+```bash
+export CONFIG_DB_SERVER="10.21.42.17,7865"
+export CONFIG_DB_NAME="master"
+export CONFIG_DB_USER="ABHIMASK"
+export CONFIG_DB_PWD="your-password"
+```
+
 PowerShell:
 
 ```powershell
@@ -65,6 +90,10 @@ $env:CONFIG_DB_NAME   = "master"
 $env:CONFIG_DB_USER   = "ABHIMASK"
 $env:CONFIG_DB_PWD    = "***"
 ```
+
+> **cron note:** cron jobs don't inherit your login shell's exports, so a
+> `.env` file is the reliable choice for scheduled runs. (The app loads it
+> regardless of how it's launched.)
 
 The same login is reused to query each database in `db_list` (they're on
 the same instance) unless overridden by `report_server`/`report_user`/
